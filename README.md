@@ -178,8 +178,19 @@ To have it start automatically every time you log into Windows, run
 opt-in step rather than something the pipeline sets up on its own —
 logon-triggered auto-start is a more invasive, persistent capability
 than a scheduled daily task, worth a deliberate decision on your end.
-The registration script also delays the logon trigger by 45 seconds,
-so it never adds to the startup rush right after you log in.
+
+That script uses the Windows **Startup folder**, not Task Scheduler:
+`Register-ScheduledTask -AtLogOn` returns `Access is denied` in this
+environment -- confirmed even run directly from an interactive session,
+not just from automation -- while plain daily-trigger tasks (the ones
+the main pipeline uses) register fine. The Startup folder is a
+different, equally standard Windows mechanism that isn't gated by
+whatever's blocking that specific Task Scheduler trigger type. Since a
+Startup-folder shortcut launches immediately at logon with no built-in
+delay option, the script generates a small VBScript launcher
+(`data/heart_widget_startup_launcher.vbs`, gitignored -- it embeds your
+machine's `pythonw.exe` path) that sleeps 45 seconds before actually
+starting the widget, so it still never adds to the startup rush.
 
 **Resource use.** Measured on a live instance before any of the
 changes below: ~0% CPU (below measurement precision over a 10s
