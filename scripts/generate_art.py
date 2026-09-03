@@ -18,7 +18,6 @@ color, so the composition reads as evenly spaced -- the gutter itself
 is the negative space between pieces -- even though shape and color
 choice stay random.
 """
-import colorsys
 import csv
 import ctypes
 import hashlib
@@ -35,8 +34,13 @@ ROOT = Path(__file__).resolve().parent.parent
 DAILY_MIX = ROOT / "data" / "daily_category_mix.csv"
 OUT_DIR = ROOT / "data" / "art"
 
-BACKGROUND = (245, 242, 235)
-OTHER_COLOR = (176, 172, 164)
+BACKGROUND = (242, 231, 219)   # #F2E7DB
+ACCENT_COLORS = [
+    (192, 122, 74),   # #C07A4A
+    (155, 91, 58),    # #9B5B3A
+    (79, 107, 90),    # #4F6B5A
+    (35, 49, 43),     # #23312B
+]
 
 FADE_COLUMNS = 3.0        # width, in fine-cell columns, of the fade-to-background zone
 COVERAGE_SCALE = 80       # visit count at which coverage reaches ~63% of the screen (1 - e^-1)
@@ -78,14 +82,10 @@ def load_latest_mix():
 
 
 def stable_color(category):
-    if category == "other":
-        return OTHER_COLOR
+    """Hash-derived pick from the fixed accent palette, so a given domain
+    gets a consistent color across different days' pieces."""
     digest = hashlib.md5(category.encode()).hexdigest()
-    hue = (int(digest[:8], 16) % 1000) / 1000
-    sat = 0.55 + (int(digest[8:10], 16) % 30) / 100
-    val = 0.65 + (int(digest[10:12], 16) % 25) / 100
-    r, g, b = colorsys.hsv_to_rgb(hue, sat, val)
-    return (int(r * 255), int(g * 255), int(b * 255))
+    return ACCENT_COLORS[int(digest[:8], 16) % len(ACCENT_COLORS)]
 
 
 def shade(color, factor):

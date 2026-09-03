@@ -77,9 +77,12 @@ Pipeline, in order, all under `scripts/`:
    uncapped function of how much browsing happened that day (`1 -
    e^(-visits / COVERAGE_SCALE)`), so the piece visibly grows or
    shrinks day to day. Past the filled budget, a few columns **fade out
-   toward the background** instead of stopping abruptly. Colors are
-   hash-derived per category name, so the same domain gets a
-   consistent-ish color across different days' pieces.
+   toward the background** instead of stopping abruptly. Colors come
+   from a fixed 5-color palette (`ACCENT_COLORS` + `BACKGROUND` in
+   generate_art.py: cream `#F2E7DB` background, `#C07A4A` / `#9B5B3A` /
+   `#4F6B5A` / `#23312B` accents) -- each category hashes to one of the
+   four accents, so the same domain gets a consistent-ish color across
+   different days' pieces.
 5. **`set_wallpaper.ps1`** — sets the newest PNG in `data/art/` as the
    Windows desktop wallpaper (Fill style), so the piece is the delivery
    surface — nothing to open manually.
