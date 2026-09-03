@@ -34,12 +34,20 @@ ROOT = Path(__file__).resolve().parent.parent
 DAILY_MIX = ROOT / "data" / "daily_category_mix.csv"
 OUT_DIR = ROOT / "data" / "art"
 
-BACKGROUND = (242, 231, 219)   # #F2E7DB
+BACKGROUND = (0, 0, 0)   # black
+# Original palette (#F2E7DB / #C07A4A / #9B5B3A / #4F6B5A / #23312B) was
+# designed for a cream background. On black, the two darkest colors would
+# nearly vanish, so they are brightened in HSV (value up, slight saturation
+# boost; dark green's hue nudged toward teal so it does not collapse into
+# sage once both are lighter). Cream and orange were already vivid enough
+# to keep as-is. Cream is no longer the background, so it joins the accent
+# rotation instead.
 ACCENT_COLORS = [
-    (192, 122, 74),   # #C07A4A
-    (155, 91, 58),    # #9B5B3A
-    (79, 107, 90),    # #4F6B5A
-    (35, 49, 43),     # #23312B
+    (242, 231, 218),  # #F2E7DA -- cream, unchanged
+    (191, 122, 75),   # #BF7A4B -- orange, unchanged
+    (184, 101, 59),   # #B8653B -- rust, brightened from #9B5B3A
+    (98, 148, 117),   # #629475 -- sage, brightened from #4F6B5A
+    (59, 102, 89),    # #3B6659 -- dark green, brightened from #23312B
 ]
 
 FADE_COLUMNS = 3.0        # width, in fine-cell columns, of the fade-to-background zone
