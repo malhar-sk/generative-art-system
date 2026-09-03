@@ -4,11 +4,22 @@ own category (named after the domain); everything else falls into "other".
 Categories adapt automatically as your browsing changes, no manual rules
 to maintain.
 
+Domain-to-category membership uses hysteresis (see DEMOTE_BUFFER below) so
+a domain hovering right at the rank cutoff doesn't flicker in and out of
+its own category -- and therefore its own color -- from one run to the
+next. Promotion into a category is immediate (a new domain crossing the
+strict cutoff just adds a color); demotion is delayed until a domain falls
+well past the cutoff, since losing an established color identity is the
+jarring case, not gaining a new one.
+
 Reads the SQLite copy made by export_brave_history.ps1. Writes:
-  data/categorized_visits.csv  -- every visit tagged with a category
-  data/daily_category_mix.csv  -- visit counts per category per day
+  data/categorized_visits.csv     -- every visit tagged with a category
+  data/daily_category_mix.csv     -- visit counts per category per day
+  data/category_membership.json   -- hysteresis state (which domains are
+                                      confirmed categories right now)
 """
 import csv
+import json
 import sqlite3
 import sys
 from collections import Counter, defaultdict
@@ -20,12 +31,16 @@ ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "data" / "brave_history" / "History.sqlite"
 VISITS_OUT = ROOT / "data" / "categorized_visits.csv"
 DAILY_OUT = ROOT / "data" / "daily_category_mix.csv"
+CATEGORY_STATE_PATH = ROOT / "data" / "category_membership.json"
 
 WEBKIT_EPOCH = datetime(1601, 1, 1)
 
-# How many distinct domain-categories to carve out of the history; the rest
-# fold into "other". Raise this for more variety in the rendered art.
+# How many domains clear the strict cutoff to be promoted into their own
+# category; the rest fold into "other".
 TOP_N_DOMAINS = 14
+# A previously confirmed category only demotes once its rank falls past
+# TOP_N_DOMAINS + DEMOTE_BUFFER, not the moment it dips below TOP_N_DOMAINS.
+DEMOTE_BUFFER = 5
 
 
 def registrable_domain(url: str) -> str:
@@ -41,6 +56,34 @@ def registrable_domain(url: str) -> str:
 
 def webkit_to_datetime(webkit_ts: int) -> datetime:
     return WEBKIT_EPOCH + timedelta(microseconds=webkit_ts)
+
+
+def load_confirmed_domains() -> set:
+    try:
+        with CATEGORY_STATE_PATH.open(encoding="utf-8") as f:
+            return set(json.load(f).get("confirmed_domains", []))
+    except (FileNotFoundError, OSError, ValueError):
+        return set()  # missing or corrupt state -> safe fallback, not a crash
+
+
+def save_confirmed_domains(domains: set) -> None:
+    CATEGORY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with CATEGORY_STATE_PATH.open("w", encoding="utf-8") as f:
+        json.dump({"confirmed_domains": sorted(domains)}, f, indent=2)
+
+
+def select_categories(domain_counts: Counter) -> set:
+    ranked = [domain for domain, _ in domain_counts.most_common()]
+    promote_zone = set(ranked[:TOP_N_DOMAINS])
+    keep_zone = set(ranked[:TOP_N_DOMAINS + DEMOTE_BUFFER])
+
+    previously_confirmed = load_confirmed_domains()
+    confirmed = (previously_confirmed & keep_zone) | promote_zone
+    if len(confirmed) > TOP_N_DOMAINS + DEMOTE_BUFFER:
+        confirmed = set(ranked[:TOP_N_DOMAINS + DEMOTE_BUFFER])  # defensive cap
+
+    save_confirmed_domains(confirmed)
+    return confirmed
 
 
 def main() -> None:
@@ -59,8 +102,8 @@ def main() -> None:
     domain_counts = Counter(
         registrable_domain(url) for url, _, visit_time in rows if visit_time
     )
-    domain_counts.pop("other", None)  # empty-netloc visits never claim a top-N slot
-    top_domains = {domain for domain, _ in domain_counts.most_common(TOP_N_DOMAINS)}
+    domain_counts.pop("other", None)  # empty-netloc visits never claim a category slot
+    top_domains = select_categories(domain_counts)
 
     def categorize(url: str) -> str:
         domain = registrable_domain(url)

@@ -1,12 +1,17 @@
-"""Render the day's category mix as a screen-filling geometric mosaic PNG.
+"""Render a decay-weighted recent-history category mix as a screen-filling
+geometric mosaic PNG.
 
-Reads the most recent completed day's category counts from
-data/daily_category_mix.csv. The canvas is sized to the actual primary
-screen resolution, divided into a fine grid of icon-sized cells (using
-the configured Windows shell icon size). Symbols are drawn in randomly
-sized groups of those fine cells (mostly pairs and quads, sometimes
-bigger accent pieces) rather than one shape per tiny cell, since a
-single icon-sized shape would be too small to read.
+Reads data/daily_category_mix.csv and combines it into one snapshot using
+exponential recency weighting (see HALF_LIFE_DAYS) rather than a single
+day's raw counts -- each prior day contributes, weighted down the further
+back it is, so the piece drifts gradually day to day instead of jumping
+around on daily noise, while still being dominated by roughly the last
+few weeks. The canvas is sized to the actual primary screen resolution,
+divided into a fine grid of icon-sized cells (using the configured
+Windows shell icon size). Symbols are drawn in randomly sized groups of
+those fine cells (mostly pairs and quads, sometimes bigger accent
+pieces) rather than one shape per tiny cell, since a single icon-sized
+shape would be too small to read.
 
 How much of the screen fills is not a fixed floor or a forced 100% --
 it is a smooth, uncapped function of how much browsing happened that
@@ -25,7 +30,7 @@ import math
 import random
 import sys
 import winreg
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -51,8 +56,11 @@ ACCENT_COLORS = [
 ]
 
 FADE_COLUMNS = 3.0        # width, in fine-cell columns, of the fade-to-background zone
-COVERAGE_SCALE = 80       # visit count at which coverage reaches ~63% of the screen (1 - e^-1)
+COVERAGE_SCALE = 80       # *daily-average* visit count at which coverage reaches ~63% of the screen
 GUTTER_FRACTION = 0.12    # inset applied to every group's box, as a fraction of icon size
+
+HALF_LIFE_DAYS = 8        # a day's weight halves every this many days back
+LOOKBACK_DAYS = 90        # days of history considered; beyond this the weight is negligible anyway
 
 
 def detect_screen_size():
@@ -70,7 +78,20 @@ def detect_icon_size():
         return 32
 
 
-def load_latest_mix():
+def load_weighted_mix():
+    """Combine recent days into one decay-weighted category snapshot instead
+    of using a single day's raw counts. Excludes today (always partial --
+    the day isn't over) and anchors the decay on the most recent *completed*
+    day, matching the daily-9am schedule: each morning renders yesterday
+    weighted heavily, with the last few weeks tailing off behind it.
+
+    Returns (anchor_day, weighted_counts, effective_daily_visits) where
+    weighted_counts are category shares on an arbitrary relative scale (fine
+    for proportional shape/color choice) and effective_daily_visits is the
+    weighted counts renormalized back to a single-day scale (the sum divided
+    by the total weight applied), so the coverage formula -- tuned against
+    single-day visit counts -- still spans quiet-to-busy correctly instead
+    of saturating once several weeks are being blended together."""
     if not DAILY_MIX.exists():
         sys.exit(f"No categorized data found at {DAILY_MIX}. Run categorize.py first.")
     with DAILY_MIX.open(encoding="utf-8") as f:
@@ -82,11 +103,36 @@ def load_latest_mix():
 
     today = date.today().isoformat()
     completed = [r for r in rows if r["date"] < today] or rows
+    if not completed:
+        sys.exit("No completed days in daily_category_mix.csv -- nothing to render.")
+
     categories = [c for c in fieldnames if c not in ("date", "total")]
-    latest = completed[-1]
-    day = latest["date"]
-    counts = {c: int(latest[c]) for c in categories if int(latest[c]) > 0}
-    return day, counts
+    anchor_day = completed[-1]["date"]
+    anchor = date.fromisoformat(anchor_day)
+    cutoff = anchor - timedelta(days=LOOKBACK_DAYS)
+
+    weighted_counts = {}
+    weight_total = 0.0
+    for row in completed:
+        day = date.fromisoformat(row["date"])
+        if day < cutoff:
+            continue
+        days_ago = (anchor - day).days
+        weight = 0.5 ** (days_ago / HALF_LIFE_DAYS)
+        row_total = sum(int(row[c]) for c in categories)
+        if row_total == 0:
+            continue
+        weight_total += weight
+        for c in categories:
+            n = int(row[c])
+            if n:
+                weighted_counts[c] = weighted_counts.get(c, 0.0) + n * weight
+
+    if not weighted_counts:
+        sys.exit("No visits within the lookback window -- nothing to render.")
+
+    effective_daily_visits = sum(weighted_counts.values()) / weight_total if weight_total else 0.0
+    return anchor_day, weighted_counts, effective_daily_visits
 
 
 def stable_color(category):
@@ -182,7 +228,7 @@ def fits_free(used, col, row, w, h, cols, rows):
     return not any(used[col + dx][row + dy] for dx in range(w) for dy in range(h))
 
 
-def render(day, counts):
+def render(day, counts, effective_visits):
     screen_w, screen_h = detect_screen_size()
     icon = detect_icon_size()
 
@@ -191,9 +237,8 @@ def render(day, counts):
     total_cells = cols * rows
     gutter = icon * GUTTER_FRACTION
 
-    total_visits = sum(counts.values())
     categories = list(counts.keys()) or ["other"]
-    weights = [counts.get(c, 1) for c in categories]
+    weights = [counts.get(c, 1) for c in categories]  # relative shares; scale doesn't matter here
     palette = {c: stable_color(c) for c in categories}
 
     seed_int = int(hashlib.sha256(day.encode()).hexdigest(), 16)
@@ -201,7 +246,10 @@ def render(day, counts):
 
     # Uncapped, organic coverage -- approaches (never forced to) a full
     # screen as visit volume grows, shrinks back down on quiet days.
-    coverage = 1 - math.exp(-total_visits / COVERAGE_SCALE)
+    # Driven by effective_visits (the decay-weighted window renormalized
+    # to a single-day scale), not a raw multi-day sum -- otherwise blending
+    # weeks of history together would saturate this near 100% every time.
+    coverage = 1 - math.exp(-effective_visits / COVERAGE_SCALE)
     budget_cells = round(coverage * total_cells)
     boundary_col = budget_cells / rows if rows else 0
 
@@ -258,14 +306,15 @@ def render(day, counts):
 
 
 def main():
-    day, counts = load_latest_mix()
-    out_path, symbol_count, budget_cells, total_cells, screen, icon = render(day, counts)
-    total = sum(counts.values())
-    mix_summary = ", ".join(f"{c}={n}" for c, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+    day, counts, effective_visits = load_weighted_mix()
+    out_path, symbol_count, budget_cells, total_cells, screen, icon = render(day, counts, effective_visits)
+    mix_summary = ", ".join(
+        f"{c}={n:.0f}" for c, n in sorted(counts.items(), key=lambda kv: -kv[1])
+    )
     grid_cols = screen[0] // icon
     grid_rows = screen[1] // icon
     print(f"Screen {screen[0]}x{screen[1]}, icon size {icon}px -> grid {grid_cols}x{grid_rows} ({total_cells} cells)")
-    print(f"{day}: {total} visits across {len(counts)} categories ({mix_summary})")
+    print(f"As of {day} (decay-weighted, half-life {HALF_LIFE_DAYS}d): ~{effective_visits:.1f} effective visits/day across {len(counts)} categories ({mix_summary})")
     print(f"Drew {symbol_count} symbols covering {budget_cells}/{total_cells} cells ({budget_cells/total_cells:.0%})")
     print(f"Rendered {out_path}")
 
