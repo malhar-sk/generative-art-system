@@ -9,13 +9,18 @@ Once you've hearted a render, the button hides itself for the rest of
 that day -- it only reappears once a new render (tomorrow's) becomes
 current. This is a once-a-day action, not a toggle.
 
-The window is reparented into Explorer's WorkerW window (the same
-technique interactive-wallpaper tools use) so it lives on the desktop
-layer itself: it sits behind every normal application window and only
-shows through when the desktop is actually visible, rather than
-floating on top of whatever you're using. Falls back to a plain
-always-on-top window if that reparenting fails (e.g. a future Windows
-update changes Explorer's internal window structure).
+Stays out of the way of other apps: it's an overrideredirect window
+(so it never appears in the taskbar or Alt-Tab -- there's no way to
+bring it forward through normal window switching) and, instead of
+-topmost, it periodically re-lowers itself to the bottom of the
+window stack. Any app you open or click naturally ends up in front of
+it within about a second. This was chosen over reparenting into
+Explorer's WorkerW window (the technique interactive-wallpaper tools
+use for true desktop-layer attachment) after testing showed WorkerW
+discovery is unreliable across Windows sessions -- lower()/SetWindowPos
+is a plain, fully-supported window-stacking operation with no
+dependency on Explorer's undocumented internals, so it works the same
+everywhere.
 
 Runs continuously in the background. Auto-start at logon is opt-in --
 run scripts/register_heart_widget_task.ps1 yourself to set that up
@@ -30,7 +35,6 @@ import os
 import shutil
 import sys
 import tkinter as tk
-from ctypes import wintypes
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -41,7 +45,8 @@ FAVORITES_DIR = Path.home() / "Pictures" / "GenerativeArtFavorites"
 
 SIZE = 56
 MARGIN = 16
-REFRESH_MS = 60 * 1000
+REFRESH_MS = 60 * 1000     # recheck which render is current, once a minute
+LOWER_MS = 1000            # re-assert bottom-of-stack, once a second
 CONFIRM_MS = 700
 BACKGROUND = (0, 0, 0)
 
@@ -77,43 +82,6 @@ def current_render_path():
     return pngs[-1] if pngs else None
 
 
-def attach_to_desktop(hwnd):
-    """Reparents hwnd into Explorer's WorkerW window, the same technique
-    interactive-wallpaper tools (Wallpaper Engine, Lively, etc.) use to
-    live on the desktop layer -- behind every normal app window, visible
-    only when the desktop itself is. Returns False (caller should fall
-    back to a plain topmost window) if Explorer's window structure
-    doesn't match what's expected."""
-    user32 = ctypes.windll.user32
-
-    progman = user32.FindWindowW("Progman", None)
-    if not progman:
-        return False
-
-    result = wintypes.DWORD()
-    user32.SendMessageTimeoutW(progman, 0x052C, 0, 0, 0x0, 1000, ctypes.byref(result))
-
-    workerw = wintypes.HWND(0)
-
-    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    def enum_windows_proc(top_hwnd, _lparam):
-        nonlocal workerw
-        shell_view = user32.FindWindowExW(top_hwnd, 0, "SHELLDLL_DefView", None)
-        if shell_view:
-            candidate = user32.FindWindowExW(0, top_hwnd, "WorkerW", None)
-            if candidate:
-                workerw = wintypes.HWND(candidate)
-        return True
-
-    user32.EnumWindows(enum_windows_proc, 0)
-
-    if not workerw.value:
-        return False
-
-    user32.SetParent(hwnd, workerw)
-    return True
-
-
 class HeartWidget:
     def __init__(self, root):
         self.root = root
@@ -137,12 +105,15 @@ class HeartWidget:
         self.label.bind("<Button-1>", self.on_click)
         self.label.bind("<Button-3>", lambda e: root.destroy())
 
-        root.update_idletasks()
-        if not attach_to_desktop(root.winfo_id()):
-            log("desktop attach failed, falling back to always-on-top")
-            root.attributes("-topmost", True)
-
         self.refresh()
+        self.keep_lowered()
+
+    def keep_lowered(self):
+        try:
+            self.root.lower()
+        except tk.TclError:
+            pass
+        self.root.after(LOWER_MS, self.keep_lowered)
 
     def refresh(self):
         new_path = current_render_path()
@@ -156,6 +127,7 @@ class HeartWidget:
         else:
             self.update_glyph()
             self.root.deiconify()
+            self.root.lower()
 
         self.root.after(REFRESH_MS, self.refresh)
 

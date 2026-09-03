@@ -145,17 +145,20 @@ tomorrow's render becomes current (checked once a minute). If the
 process restarts mid-day after you've already hearted that render, it
 comes back up already hidden rather than re-showing.
 
-The window is reparented into Explorer's `WorkerW` window — the same
-technique interactive-wallpaper tools (Wallpaper Engine, Lively, etc.)
-use — so it lives on the desktop layer itself: behind every normal
-app window, only showing through when the desktop is actually visible,
-rather than floating on top of whatever you're using. This depends on
-Explorer's internal window structure, which isn't officially documented
-and can vary by Windows version/session; if it can't find a usable
-`WorkerW`, it falls back to a plain always-on-top window instead of
-not showing at all. Check `data/heart_widget.log` if you want to know
-which mode is active (it logs `desktop attach failed, falling back to
-always-on-top` when the fallback engages).
+It stays out of the way of other apps without ever being "always on
+top": it's an overrideredirect window, so it never shows up in the
+taskbar or Alt-Tab (no normal way to bring it forward), and instead of
+pinning itself above everything, it periodically re-lowers itself to
+the bottom of the window stack (once a second). Any app you open or
+click naturally ends up in front of it within about a second. This was
+chosen over reparenting into Explorer's `WorkerW` window (the
+technique interactive-wallpaper tools use for true desktop-layer
+attachment) after testing showed `WorkerW` discovery is unreliable
+across Windows sessions -- it depends on Explorer's undocumented
+internal window structure, which varies by version/session (confirmed
+failing in two different environments during development). Lowering
+the window is a plain, fully-supported stacking operation with no such
+dependency, so it behaves the same everywhere.
 
 It uses a solid black background matching the wallpaper's own
 background color rather than true window transparency — Windows'
