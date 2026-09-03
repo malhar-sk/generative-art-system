@@ -28,16 +28,18 @@ to run on a schedule and dump output to a local folder.
 
 - **Source: Brave browsing/search history**, auto-exported locally on a
   schedule (see `scripts/`).
-- **Categorization: simple keyword/domain rules**, sorting visits into
-  topic buckets (stocks, video games, food, photos, stationary,
-  minecraft, and an `other` catch-all). Deliberately not using an LLM
-  classifier for this — misclassified or mixed-bucket entries are fine.
-  The goal is *variety* in the category mix driving the visuals, not
-  classification precision.
-- The category mix (which buckets dominate a given day, how the mix
-  shifts over time) is the real-data signal behind the piece — category
-  → color, proportion → how much of the ring that color claims. See
-  "How it works" below for the actual rendering approach.
+- **Categorization: adaptive, domain-driven, not a fixed type list.**
+  `categorize.py` doesn't hardcode categories like "stocks" or "video
+  games" — it looks at whatever's actually in your history, ranks
+  domains by visit count, and turns the most-visited ones into their
+  own categories automatically (named after the domain, e.g.
+  `youtube.com`, `claude.ai`, `github.com`). Everything outside the top
+  domains folds into `other`. This means the category set self-adjusts
+  as browsing habits change — nothing to manually re-tune.
+- The category mix (which domains dominate a given day, how much
+  browsing happened at all) is the real-data signal behind the piece —
+  category → shape color, volume → how much of the canvas fills up.
+  See "How it works" below for the actual rendering approach.
 
 ## How it works
 
@@ -51,22 +53,27 @@ Pipeline, in order, all under `scripts/`:
    per-URL summary to `data/history.csv` (url, title, visit_count,
    last_visit).
 3. **`categorize.py`** — reads the same SQLite copy's `visits` table
-   (one row per visit event, not just per URL), applies the
-   keyword/domain rules to each visit, and writes:
+   (one row per visit event, not just per URL), ranks domains by visit
+   count and picks the top ones as categories (see "Data source"
+   above), and writes:
    - `data/categorized_visits.csv` — every visit tagged with a category
    - `data/daily_category_mix.csv` — visit counts per category per day
-4. **`generate_art.py`** — takes the most recent day's category mix
-   from `daily_category_mix.csv` and renders `data/art/<date>.png`: a
-   ring built from ~720 thin wedges swept around a center point. Each
-   wedge's *color* comes from which category's share of the day it
-   falls into (arranged in a fixed order so colors stay legible day to
-   day); each wedge's *radius* is offset by a handful of sine
-   harmonics seeded from the date string, so the ring's edge is never
-   perfectly circular — it undulates. This is the seeded-variation
-   layer described below: real data drives the color bands, the seeded
-   noise guarantees the edge always has visible movement even on a
-   flat/quiet data day.
-5. **`run_export.ps1`** — chains all four steps above. This is what a
+4. **`generate_art.py`** — takes the most recent *completed* day's
+   category counts and renders `data/art/<date>.png` as a geometric
+   mosaic: a 6×10 grid of cells, each filled with a random shape
+   (triangle / quarter-circle fan / circle / semicircle / stripes /
+   square), colored by a category chosen with probability proportional
+   to that category's share of the day. Cells fill **column by column
+   starting from the left**; how many cells get filled scales with how
+   much browsing happened that day, and if the grid isn't fully used,
+   the last couple of columns **fade out toward the background**
+   instead of stopping abruptly. Colors are hash-derived per category
+   name, so the same domain gets a consistent-ish color across
+   different days' pieces.
+5. **`set_wallpaper.ps1`** — sets the newest PNG in `data/art/` as the
+   Windows desktop wallpaper (Fill style), so the piece is the delivery
+   surface — nothing to open manually.
+6. **`run_export.ps1`** — chains all five steps above. This is what a
    daily Windows Scheduled Task (`GenerativeArtSystem-BraveHistoryExport`)
    runs automatically at 9 AM, so the pipeline refreshes without
    manual intervention.
@@ -79,19 +86,20 @@ of it is committed. Only the scripts that produce it are.
 If the data-to-visual transform were purely deterministic, quiet/flat
 data days (barely any browsing, or one category dominating) would
 produce flat, boring art — undermining the whole point of satisfying
-novelty-seeking. That's why `generate_art.py`'s ring radius is offset
-by noise harmonics seeded on the date: real data still visibly steers
-the color composition, but the seeded variation guarantees the shape
-itself is never flat, independent of how eventful the day's browsing
-was.
+novelty-seeking. `generate_art.py` handles this two ways: shape choice
+and fill order within the data-driven budget are seeded per-day random
+(not a fixed layout), and on a quiet day the fade-out zone still gives
+the piece visible texture at the boundary rather than just stopping
+dead. Real data still steers the color composition and how much of the
+canvas fills; the seeded randomness guarantees the arrangement is never
+the same twice.
 
 ## Next ideas (not built yet)
 
-- Expand/tune the category rules as real gaps show up in
-  `categorized_visits.csv` (categories currently: stocks, video_games,
-  minecraft, food, photos, stationary, other).
-- Multi-day views (a strip or grid of rings across a week/month) to
-  make the undulation-over-time more visible than a single day's PNG.
-- Decide on a delivery surface (wallpaper? local gallery folder?) —
-  there's still no forcing function pulling this back into view, so
-  the delivery surface is doing all the work of getting it seen.
+- Tune `TOP_N_DOMAINS` and `SHAPES_PER_VISIT` in `categorize.py` /
+  `generate_art.py` as real usage patterns become clearer.
+- Multi-day views (a strip or grid of mosaics across a week/month) to
+  make change over time more visible than a single day's PNG.
+- Consider a secondary/fallback delivery surface beyond wallpaper (a
+  local gallery folder?) — there's still no forcing function pulling
+  this back into view otherwise.
