@@ -1,4 +1,4 @@
-# Full daily pipeline: export Brave history -> parse -> categorize -> render art -> set wallpaper.
+# Full daily pipeline: export Brave history -> parse -> categorize -> render art -> set wallpaper -> prune archive.
 # This is the script Task Scheduler calls.
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -7,3 +7,4 @@ python "$root\scripts\parse_brave_history.py"
 python "$root\scripts\categorize.py"
 python "$root\scripts\generate_art.py"
 & "$root\scripts\set_wallpaper.ps1"
+python "$root\scripts\prune_archive.py"

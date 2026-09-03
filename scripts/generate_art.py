@@ -22,10 +22,21 @@ Every group gets the same gutter inset regardless of its size or
 color, so the composition reads as evenly spaced -- the gutter itself
 is the negative space between pieces -- even though shape and color
 choice stay random.
+
+The grid layout itself has memory: each render loads the previous
+render's group placement (data/render_state.json) and reuses it at
+roughly REUSE_PROBABILITY of positions -- same size, same shape type --
+while the rest mutate fresh. Color always reflects today's real data
+regardless of whether a group's geometry was inherited or freshly
+rolled, so the piece has actual lineage (today's image descends from
+yesterday's) instead of being a full recompute each time. Falls back
+to a fully fresh layout if the state file is missing, corrupt, or the
+screen/icon size changed since the last render.
 """
 import csv
 import ctypes
 import hashlib
+import json
 import math
 import random
 import sys
@@ -38,6 +49,7 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 DAILY_MIX = ROOT / "data" / "daily_category_mix.csv"
 OUT_DIR = ROOT / "data" / "art"
+LAYOUT_STATE_PATH = ROOT / "data" / "render_state.json"
 
 BACKGROUND = (0, 0, 0)   # black
 # Original palette (#F2E7DB / #C07A4A / #9B5B3A / #4F6B5A / #23312B) was
@@ -61,6 +73,8 @@ GUTTER_FRACTION = 0.12    # inset applied to every group's box, as a fraction of
 
 HALF_LIFE_DAYS = 8        # a day's weight halves every this many days back
 LOOKBACK_DAYS = 90        # days of history considered; beyond this the weight is negligible anyway
+
+REUSE_PROBABILITY = 0.70  # fraction of grid positions that inherit yesterday's group (size + shape type) rather than rolling fresh -- the piece's visual memory
 
 
 def detect_screen_size():
@@ -207,6 +221,41 @@ def draw_square(draw, box, color, rng):
 
 
 SHAPE_DRAWERS = [draw_triangle, draw_fan, draw_circle, draw_semicircle, draw_stripes, draw_square]
+SHAPE_BY_NAME = {fn.__name__: fn for fn in SHAPE_DRAWERS}
+
+
+def load_prior_layout(cols, rows, icon):
+    """Returns {(col, row): (w, h, shape_name)} for the previous render's
+    group placement, keyed by each group's origin cell. Empty dict (fresh
+    layout, no bias) if the state file is missing, corrupt, or the grid
+    dimensions changed since the last render (different screen/icon size
+    makes the old positions meaningless)."""
+    try:
+        with LAYOUT_STATE_PATH.open(encoding="utf-8") as f:
+            state = json.load(f)
+        grid = state["grid"]
+        if (grid["cols"], grid["rows"], grid["icon"]) != (cols, rows, icon):
+            return {}
+        return {
+            (g["col"], g["row"]): (g["w"], g["h"], g["shape"])
+            for g in state["groups"]
+        }
+    except (FileNotFoundError, OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def save_layout(day, cols, rows, icon, placed_groups):
+    LAYOUT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    state = {
+        "date": day,
+        "grid": {"cols": cols, "rows": rows, "icon": icon},
+        "groups": [
+            {"col": col, "row": row, "w": w, "h": h, "shape": shape_name}
+            for col, row, w, h, shape_name in placed_groups
+        ],
+    }
+    with LAYOUT_STATE_PATH.open("w", encoding="utf-8") as f:
+        json.dump(state, f)
 
 
 def choose_group_size(rng):
@@ -253,12 +302,15 @@ def render(day, counts, effective_visits):
     budget_cells = round(coverage * total_cells)
     boundary_col = budget_cells / rows if rows else 0
 
+    prior_layout = load_prior_layout(cols, rows, icon)
+
     img = Image.new("RGB", (cols * icon, rows * icon), BACKGROUND)
     draw = ImageDraw.Draw(img)
     used = [[False] * rows for _ in range(cols)]
 
     filled_cells = 0
     symbol_count = 0
+    placed_groups = []
     for col in range(cols):
         row = 0
         while row < rows:
@@ -266,7 +318,14 @@ def render(day, counts, effective_visits):
                 row += 1
                 continue
 
-            w, h = choose_group_size(rng)
+            prior = prior_layout.get((col, row))
+            if prior is not None and rng.random() < REUSE_PROBABILITY:
+                w, h, shape_name = prior
+                shape_fn = SHAPE_BY_NAME.get(shape_name) or SHAPE_DRAWERS[rng.randrange(len(SHAPE_DRAWERS))]
+            else:
+                w, h = choose_group_size(rng)
+                shape_fn = SHAPE_DRAWERS[rng.randrange(len(SHAPE_DRAWERS))]
+
             while (w > 1 or h > 1) and not fits_free(used, col, row, w, h, cols, rows):
                 if w >= h and w > 1:
                     w -= 1
@@ -278,10 +337,10 @@ def render(day, counts, effective_visits):
             for dx in range(w):
                 for dy in range(h):
                     used[col + dx][row + dy] = True
+            placed_groups.append((col, row, w, h, shape_fn.__name__))
 
             outer = (col * icon, row * icon, (col + w) * icon, (row + h) * icon)
             box = (outer[0] + gutter, outer[1] + gutter, outer[2] - gutter, outer[3] - gutter)
-            shape_fn = SHAPE_DRAWERS[rng.randrange(len(SHAPE_DRAWERS))]
 
             if filled_cells < budget_cells:
                 category = rng.choices(categories, weights=weights)[0]
@@ -298,6 +357,8 @@ def render(day, counts, effective_visits):
 
             filled_cells += w * h
             row += h
+
+    save_layout(day, cols, rows, icon, placed_groups)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUT_DIR / f"{day}.png"

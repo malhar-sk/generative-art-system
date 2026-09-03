@@ -49,6 +49,13 @@ to run on a schedule and dump output to a local folder.
 - The category mix feeding a render isn’t a single day’s snapshot —
   see "How it works" below for how recent days are blended together,
   and how that mix drives the piece.
+- **The grid layout itself persists across renders**
+  (`data/render_state.json`, gitignored) — each render inherits
+  roughly 70% of the previous render's shape positions/sizes/types,
+  mutating the rest, so today's piece has actual lineage from
+  yesterday's rather than being a full recompute each time. Falls
+  back to a fresh layout if the state file is missing, corrupt, or
+  the screen/icon size changed.
 
 ## How it works
 
@@ -108,7 +115,13 @@ Pipeline, in order, all under `scripts/`:
 5. **`set_wallpaper.ps1`** — sets the newest PNG in `data/art/` as the
    Windows desktop wallpaper (Fill style), so the piece is the delivery
    surface — nothing to open manually.
-6. **`run_export.ps1`** — chains all five steps above. This is what a
+6. **`prune_archive.py`** — every render is dated
+   (`data/art/<date>.png`), so nothing gets overwritten day to day —
+   but left alone that archive grows one PNG forever. This keeps every
+   render from the last 90 days, and thins anything older down to one
+   per ISO week (oldest render in each week survives), so a long-run
+   timelapse stays possible without unbounded disk growth.
+7. **`run_export.ps1`** — chains all six steps above. This is what a
    daily Windows Scheduled Task (`GenerativeArtSystem-BraveHistoryExport`)
    runs automatically at 9 AM, so the pipeline refreshes without
    manual intervention.
@@ -133,31 +146,37 @@ the same twice.
 
 Council-reviewed decision (see project history for the full session):
 rejected batching to one render every ~3 weeks, since that's a slower
-snapshot, not evolution — you'd notice it *less*, not more. Instead,
-the daily 9am render reads a decay-weighted recent-history window (see
-"How it works" step 4), so the ~3-week feel comes from a smooth,
-continuously-updating blend rather than an infrequent jump.
+snapshot, not evolution — you'd notice it *less*, not more. Built
+instead, in order of the council's recommendation:
 
-The council's stronger point, not yet built: decay-weighting is still
-a fresh recompute from raw history every time, not true persistence —
-a wallpaper only really "evolves" once today's render is a function of
-*yesterday's render*, not just a bigger pile of the same input. Next
-step in that direction: persist the previous render's shape layout as
-a JSON sidecar and bias new positions to overlap with it (~70%), so
-the image has actual lineage. Falls back to a fresh render if the
-sidecar is missing or unreadable.
+1. The daily 9am render reads a decay-weighted recent-history window
+   (see "How it works" step 4), so the ~3-week feel comes from a
+   smooth, continuously-updating blend rather than an infrequent jump.
+2. The coverage formula runs on that window's renormalized average,
+   not a raw multi-day sum, so it doesn't saturate near full-screen
+   every render.
+3. Category-to-color identity is stabilized with hysteresis (see
+   "Data source" above) so it can't flicker.
+4. The council's strongest point: decay-weighting alone is still a
+   fresh recompute from raw history every time, not true persistence.
+   A wallpaper only really "evolves" once today's render is a function
+   of *yesterday's render*. The grid layout now persists across
+   renders for exactly this reason (see "Data source" above) — today's
+   piece has actual lineage from yesterday's, not just fresh data
+   poured into a fresh recompute.
+5. Renders archive instead of overwriting, with weekly thinning past
+   90 days (see "How it works" step 6), so a long-run timelapse stays
+   possible later without committing to building one now.
 
 ## Next ideas (not built yet)
 
-- Persistent shape-layout state across renders (see above) — the
-  highest-leverage remaining "feels alive" change per the council
-  session.
-- Archive renders instead of overwriting `data/art/`, with a retention
-  cap (e.g. daily for 90 days, then thin to weekly) — enables a
-  timelapse later without committing to one now.
+- Something that actually uses the archive — a timelapse/GIF stitched
+  from `data/art/`, or a quarterly grid tiling recent renders into one
+  "generative memoir" piece.
 - Tune `TOP_N_DOMAINS` / `DEMOTE_BUFFER` (categorize.py) and
-  `COVERAGE_SCALE` / `HALF_LIFE_DAYS` / `GUTTER_FRACTION`
-  (generate_art.py) as real usage patterns become clearer.
+  `COVERAGE_SCALE` / `HALF_LIFE_DAYS` / `GUTTER_FRACTION` /
+  `REUSE_PROBABILITY` (generate_art.py) as real usage patterns become
+  clearer.
 - Consider a secondary/fallback delivery surface beyond wallpaper (a
   local gallery folder?) — there's still no forcing function pulling
   this back into view otherwise.
