@@ -133,15 +133,29 @@ of it is committed. Only the scripts that produce it are.
 
 **`heart_widget.py`** is a separate, always-running small program (not
 part of the daily pipeline) — a borderless heart button pinned to the
-top-right corner of the screen, always on top. Click it to copy
-whatever render is *currently* the wallpaper into a dedicated folder,
+top-right corner of the screen. Click it to copy whatever render is
+*currently* the wallpaper into a dedicated folder,
 `Pictures\GenerativeArtFavorites\` — separate from the automatic
 `data/art/` archive, which keeps every render regardless. This folder
-only holds what you deliberately hearted. Click again to un-heart
-(removes it from that folder). The heart is a plain outline when the
-current render isn't favorited, solid red when it is; it rechecks
-which render is current every 5 minutes so it stays correct across the
-daily refresh without needing a restart.
+only holds what you deliberately hearted.
+
+Hearting is a once-a-day action, not a toggle: after you click it, the
+button hides itself for the rest of that day and only reappears once
+tomorrow's render becomes current (checked once a minute). If the
+process restarts mid-day after you've already hearted that render, it
+comes back up already hidden rather than re-showing.
+
+The window is reparented into Explorer's `WorkerW` window — the same
+technique interactive-wallpaper tools (Wallpaper Engine, Lively, etc.)
+use — so it lives on the desktop layer itself: behind every normal
+app window, only showing through when the desktop is actually visible,
+rather than floating on top of whatever you're using. This depends on
+Explorer's internal window structure, which isn't officially documented
+and can vary by Windows version/session; if it can't find a usable
+`WorkerW`, it falls back to a plain always-on-top window instead of
+not showing at all. Check `data/heart_widget.log` if you want to know
+which mode is active (it logs `desktop attach failed, falling back to
+always-on-top` when the fallback engages).
 
 It uses a solid black background matching the wallpaper's own
 background color rather than true window transparency — Windows'
