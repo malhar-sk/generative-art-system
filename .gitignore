@@ -20,3 +20,9 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+
+# Local exported browsing history (personal data — never commit)
+data/
+
+# Claude Code agent tooling state (local only)
+.claude/

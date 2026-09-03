@@ -66,6 +66,23 @@ picked up:
    runs in-browser like option 2 but with a much richer drawing/animation
    vocabulary out of the box. Worth a look before defaulting to raw canvas.
 
+## Data source (decided)
+
+- **Source: Brave browsing/search history**, auto-exported locally on a
+  schedule (see `scripts/` — currently just the export plumbing exists,
+  not the art pipeline itself).
+- **Categorization: simple keyword/domain rules**, sorting visits into
+  topic buckets (stocks, video games, food, photos, stationary,
+  minecraft, and whatever other categories the rules produce).
+  Deliberately not using an LLM classifier for this — misclassified or
+  mixed-bucket entries are fine. The goal is *variety* in the category
+  mix driving the visuals, not classification precision.
+- This category mix (which buckets dominate a given day/week, how the
+  mix shifts over time) is meant to be the real-data signal behind the
+  "undulating pattern" — category → color/palette, proportion →
+  density/shape count, mix-shift-over-time → the undulation itself.
+  Still pairs with the seeded-noise layer below for low-volume days.
+
 ## Design note: determinism vs. novelty
 
 The council flagged a specific blind spot that any implementation needs
