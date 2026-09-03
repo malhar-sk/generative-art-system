@@ -129,6 +129,39 @@ Pipeline, in order, all under `scripts/`:
 All of `data/` (raw history, CSVs, rendered art) is gitignored — none
 of it is committed. Only the scripts that produce it are.
 
+## Favoriting a render
+
+**`heart_widget.py`** is a separate, always-running small program (not
+part of the daily pipeline) — a borderless heart button pinned to the
+top-right corner of the screen, always on top. Click it to copy
+whatever render is *currently* the wallpaper into a dedicated folder,
+`Pictures\GenerativeArtFavorites\` — separate from the automatic
+`data/art/` archive, which keeps every render regardless. This folder
+only holds what you deliberately hearted. Click again to un-heart
+(removes it from that folder). The heart is a plain outline when the
+current render isn't favorited, solid red when it is; it rechecks
+which render is current every 5 minutes so it stays correct across the
+daily refresh without needing a restart.
+
+It uses a solid black background matching the wallpaper's own
+background color rather than true window transparency — Windows'
+`-transparentcolor` trick breaks on anti-aliased text/emoji (a single
+chroma key ends up matching some of a glyph's own blended edge pixels,
+producing a visible hatched artifact), so this sidesteps that entirely
+by just blending in. Works especially well in the top-right corner
+specifically, since that's also the last area the mosaic's
+left-to-right fill order ever reaches.
+
+Launch it manually whenever you want it active:
+```
+pythonw scripts\heart_widget.py
+```
+To have it start automatically every time you log into Windows, run
+`scripts\register_heart_widget_task.ps1` yourself. That's a separate,
+opt-in step rather than something the pipeline sets up on its own —
+logon-triggered auto-start is a more invasive, persistent capability
+than a scheduled daily task, worth a deliberate decision on your end.
+
 ## Design note: determinism vs. novelty
 
 If the data-to-visual transform were purely deterministic, quiet/flat
