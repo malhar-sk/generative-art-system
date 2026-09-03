@@ -8,17 +8,21 @@ sized groups of those fine cells (mostly pairs and quads, sometimes
 bigger accent pieces) rather than one shape per tiny cell, since a
 single icon-sized shape would be too small to read.
 
-Groups are packed column by column starting from the left, colored by
-a category chosen with probability proportional to that category's
-share of the day. Coverage always fills at least a quarter of the
-screen -- there is plenty of history to justify it -- scaling up
-further on busier days; past the data budget, a couple of columns fade
-toward the background instead of stopping abruptly.
+How much of the screen fills is not a fixed floor or a forced 100% --
+it is a smooth, uncapped function of how much browsing happened that
+day, so the piece visibly grows or shrinks day to day rather than
+sitting at some artificial minimum or maximum. Past the filled budget,
+a few columns fade toward the background instead of stopping abruptly.
+Every group gets the same gutter inset regardless of its size or
+color, so the composition reads as evenly spaced -- the gutter itself
+is the negative space between pieces -- even though shape and color
+choice stay random.
 """
 import colorsys
 import csv
 import ctypes
 import hashlib
+import math
 import random
 import sys
 import winreg
@@ -34,10 +38,9 @@ OUT_DIR = ROOT / "data" / "art"
 BACKGROUND = (245, 242, 235)
 OTHER_COLOR = (176, 172, 164)
 
-FADE_COLUMNS = 3.0
-MIN_COVERAGE = 0.25
-MAX_EXTRA_COVERAGE = 0.65
-REFERENCE_VISITS = 400
+FADE_COLUMNS = 3.0        # width, in fine-cell columns, of the fade-to-background zone
+COVERAGE_SCALE = 80       # visit count at which coverage reaches ~63% of the screen (1 - e^-1)
+GUTTER_FRACTION = 0.12    # inset applied to every group's box, as a fraction of icon size
 
 
 def detect_screen_size():
@@ -120,8 +123,7 @@ def draw_fan(draw, box, color, rng):
 
 def draw_circle(draw, box, color, rng):
     x0, y0, x1, y1 = box
-    pad = (x1 - x0) * 0.1
-    draw.ellipse([x0 + pad, y0 + pad, x1 - pad, y1 - pad], fill=color)
+    draw.ellipse([x0, y0, x1, y1], fill=color)
 
 
 def draw_semicircle(draw, box, color, rng):
@@ -147,10 +149,7 @@ def draw_stripes(draw, box, color, rng):
 
 
 def draw_square(draw, box, color, rng):
-    x0, y0, x1, y1 = box
-    pad_x = (x1 - x0) * rng.uniform(0.1, 0.2)
-    pad_y = (y1 - y0) * rng.uniform(0.1, 0.2)
-    draw.rectangle([x0 + pad_x, y0 + pad_y, x1 - pad_x, y1 - pad_y], fill=color)
+    draw.rectangle(box, fill=color)
 
 
 SHAPE_DRAWERS = [draw_triangle, draw_fan, draw_circle, draw_semicircle, draw_stripes, draw_square]
@@ -182,6 +181,7 @@ def render(day, counts):
     cols = screen_w // icon
     rows = screen_h // icon
     total_cells = cols * rows
+    gutter = icon * GUTTER_FRACTION
 
     total_visits = sum(counts.values())
     categories = list(counts.keys()) or ["other"]
@@ -191,8 +191,10 @@ def render(day, counts):
     seed_int = int(hashlib.sha256(day.encode()).hexdigest(), 16)
     rng = random.Random(seed_int)
 
-    extra = min(MAX_EXTRA_COVERAGE, total_visits / REFERENCE_VISITS * MAX_EXTRA_COVERAGE)
-    budget_cells = round((MIN_COVERAGE + extra) * total_cells)
+    # Uncapped, organic coverage -- approaches (never forced to) a full
+    # screen as visit volume grows, shrinks back down on quiet days.
+    coverage = 1 - math.exp(-total_visits / COVERAGE_SCALE)
+    budget_cells = round(coverage * total_cells)
     boundary_col = budget_cells / rows if rows else 0
 
     img = Image.new("RGB", (cols * icon, rows * icon), BACKGROUND)
@@ -221,7 +223,8 @@ def render(day, counts):
                 for dy in range(h):
                     used[col + dx][row + dy] = True
 
-            box = (col * icon, row * icon, (col + w) * icon, (row + h) * icon)
+            outer = (col * icon, row * icon, (col + w) * icon, (row + h) * icon)
+            box = (outer[0] + gutter, outer[1] + gutter, outer[2] - gutter, outer[3] - gutter)
             shape_fn = SHAPE_DRAWERS[rng.randrange(len(SHAPE_DRAWERS))]
 
             if filled_cells < budget_cells:

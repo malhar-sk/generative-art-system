@@ -66,16 +66,20 @@ Pipeline, in order, all under `scripts/`:
    grid of icon-sized cells (matches your configured Windows shell icon
    size, read from the registry). Symbols are drawn in randomly sized
    groups of those cells — mostly pairs and quads, sometimes bigger
-   accent pieces — packed edge to edge with no gaps, each one a random
-   shape (triangle / quarter-circle fan / circle / semicircle / stripes
-   / square) colored by a category chosen with probability proportional
-   to that category's share of the day. Groups pack **column by column
-   starting from the left**; coverage always fills at least a quarter
-   of the screen and scales up on busier days, and past the data
-   budget, a few columns **fade out toward the background** instead of
-   stopping abruptly. Colors are hash-derived per category name, so the
-   same domain gets a consistent-ish color across different days'
-   pieces.
+   accent pieces — each one a random shape (triangle / quarter-circle
+   fan / circle / semicircle / stripes / square) colored by a category
+   chosen with probability proportional to that category's share of
+   the day. Every group gets the same gutter inset regardless of size
+   or color, so the piece reads as evenly spaced rather than a jumbled
+   collage — the gutter is the negative space between pieces. Groups
+   pack **column by column starting from the left**; how much of the
+   screen fills is not a fixed floor or a forced 100%, but a smooth,
+   uncapped function of how much browsing happened that day (`1 -
+   e^(-visits / COVERAGE_SCALE)`), so the piece visibly grows or
+   shrinks day to day. Past the filled budget, a few columns **fade out
+   toward the background** instead of stopping abruptly. Colors are
+   hash-derived per category name, so the same domain gets a
+   consistent-ish color across different days' pieces.
 5. **`set_wallpaper.ps1`** — sets the newest PNG in `data/art/` as the
    Windows desktop wallpaper (Fill style), so the piece is the delivery
    surface — nothing to open manually.
@@ -102,9 +106,9 @@ the same twice.
 
 ## Next ideas (not built yet)
 
-- Tune `TOP_N_DOMAINS` (categorize.py) and the coverage constants
-  (`MIN_COVERAGE`, `MAX_EXTRA_COVERAGE`, `REFERENCE_VISITS` in
-  generate_art.py) as real usage patterns become clearer.
+- Tune `TOP_N_DOMAINS` (categorize.py) and `COVERAGE_SCALE` /
+  `GUTTER_FRACTION` (generate_art.py) as real usage patterns become
+  clearer.
 - Multi-day views (a strip or grid of mosaics across a week/month) to
   make change over time more visible than a single day's PNG.
 - Consider a secondary/fallback delivery surface beyond wallpaper (a
