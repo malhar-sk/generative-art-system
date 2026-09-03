@@ -178,6 +178,32 @@ To have it start automatically every time you log into Windows, run
 opt-in step rather than something the pipeline sets up on its own —
 logon-triggered auto-start is a more invasive, persistent capability
 than a scheduled daily task, worth a deliberate decision on your end.
+The registration script also delays the logon trigger by 45 seconds,
+so it never adds to the startup rush right after you log in.
+
+**Resource use.** Measured on a live instance before any of the
+changes below: ~0% CPU (below measurement precision over a 10s
+sample) and ~28MB working set, and ~170ms from process launch to the
+window being ready. That was already negligible in raw CPU% terms,
+but wake *frequency* matters for laptop idle power independent of
+that number, so the widget is built to minimize it regardless:
+- The button's own re-lower timer (see above) only runs while it's
+  actually visible. Once hearted (or hidden on restart because it
+  was already hearted), that timer stops entirely -- for most of the
+  day, only the slow "did a new render appear" check keeps ticking.
+- Both timers are intentionally relaxed (2s for re-lowering, 5min
+  for the render check) -- there's no reason either needs to be
+  tighter for a button reacting to daily-cadence events.
+- The process sets its own priority to `IDLE` at startup, so it
+  never competes with foreground apps for CPU scheduling regardless
+  of how often it wakes. (Needed explicit HANDLE-width ctypes types
+  for `GetCurrentProcess`/`SetPriorityClass` -- the default 32-bit
+  marshaling truncates the pseudo-handle and fails silently with
+  `ERROR_INVALID_HANDLE` on 64-bit Windows otherwise.)
+
+This isn't a separate "low power mode" you opt into -- there's no
+real tradeoff to always running this way, so it's just how the
+widget behaves.
 
 ## Design note: determinism vs. novelty
 

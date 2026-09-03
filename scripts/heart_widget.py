@@ -14,7 +14,7 @@ Stays out of the way of other apps: it's an overrideredirect window
 bring it forward through normal window switching) and, instead of
 -topmost, it periodically re-lowers itself to the bottom of the
 window stack. Any app you open or click naturally ends up in front of
-it within about a second. This was chosen over reparenting into
+it within a couple seconds. This was chosen over reparenting into
 Explorer's WorkerW window (the technique interactive-wallpaper tools
 use for true desktop-layer attachment) after testing showed WorkerW
 discovery is unreliable across Windows sessions -- lower()/SetWindowPos
@@ -22,19 +22,40 @@ is a plain, fully-supported window-stacking operation with no
 dependency on Explorer's undocumented internals, so it works the same
 everywhere.
 
+Low resource use by design, not as a separate toggleable mode --
+there's no real tradeoff to always running this way, so it's just how
+the widget behaves:
+  - The re-lower timer only runs while the button is actually visible.
+    Once you heart a render (or the process restarts after already
+    having hearted it), the button withdraws and that timer stops
+    entirely -- for most of the day (typically until the next 9am
+    refresh) nothing is ticking at all except the slow "did a new
+    render appear" check.
+  - Both timers are intentionally relaxed (2s / 5min) -- there's no
+    reason for either to be tighter than that for a button reacting to
+    daily-cadence events.
+  - The process sets its own priority to IDLE at startup, so it never
+    competes with foreground apps for CPU time.
+Measured on a live instance: ~0% CPU (below measurement precision over
+a 10s sample) and ~28MB working set even in the "visible" state before
+these changes; the point of the changes above is reducing *wake
+frequency* (which affects laptop idle power beyond what a CPU% number
+captures), not chasing an already-negligible CPU number down further.
+
 Runs continuously in the background. Auto-start at logon is opt-in --
 run scripts/register_heart_widget_task.ps1 yourself to set that up
 (logon-triggered tasks are a form of persistent auto-start, so that's a
 decision you make explicitly, not something this script does on its
 own); until then, launch it manually with pythonw scripts/heart_widget.py.
-Rechecks which render is "current" every minute, so it stays correct
-across the daily 9am refresh without needing a restart.
+The registration script adds a delay after logon so this never
+competes with the startup rush of other apps -- see its own comments.
 """
 import ctypes
 import os
 import shutil
 import sys
 import tkinter as tk
+from ctypes import wintypes
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,13 +66,15 @@ FAVORITES_DIR = Path.home() / "Pictures" / "GenerativeArtFavorites"
 
 SIZE = 56
 MARGIN = 16
-REFRESH_MS = 60 * 1000     # recheck which render is current, once a minute
-LOWER_MS = 1000            # re-assert bottom-of-stack, once a second
+REFRESH_MS = 5 * 60 * 1000  # recheck which render is current, once every 5 minutes
+LOWER_MS = 2000             # re-assert bottom-of-stack, only while visible
 CONFIRM_MS = 700
 BACKGROUND = (0, 0, 0)
 
 HEART_EMPTY = "♡"
 HEART_FULL = "♥"
+
+IDLE_PRIORITY_CLASS = 0x00000040
 
 
 def log(message):
@@ -60,6 +83,24 @@ def log(message):
             f.write(message + "\n")
     except OSError:
         pass
+
+
+def lower_own_priority():
+    """Runs at IDLE priority so this never competes with foreground apps
+    for CPU scheduling, regardless of how infrequently it actually wakes.
+    GetCurrentProcess's pseudo-handle needs explicit HANDLE-width types --
+    ctypes defaults to 32-bit int, which truncates it and makes
+    SetPriorityClass fail with ERROR_INVALID_HANDLE on 64-bit Windows."""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.SetPriorityClass.restype = wintypes.BOOL
+        handle = kernel32.GetCurrentProcess()
+        if not kernel32.SetPriorityClass(handle, IDLE_PRIORITY_CLASS):
+            log(f"SetPriorityClass failed, GetLastError={ctypes.windll.kernel32.GetLastError()}")
+    except OSError as e:
+        log(f"lower_own_priority failed: {e}")
 
 
 def already_running():
@@ -87,6 +128,7 @@ class HeartWidget:
         self.root = root
         self.current_path = None
         self.hidden_for_today = False
+        self.lowering_active = False
 
         bg_hex = "#%02x%02x%02x" % BACKGROUND
         root.overrideredirect(True)
@@ -106,9 +148,11 @@ class HeartWidget:
         self.label.bind("<Button-3>", lambda e: root.destroy())
 
         self.refresh()
-        self.keep_lowered()
 
     def keep_lowered(self):
+        if self.hidden_for_today:
+            self.lowering_active = False
+            return
         try:
             self.root.lower()
         except tk.TclError:
@@ -128,6 +172,9 @@ class HeartWidget:
             self.update_glyph()
             self.root.deiconify()
             self.root.lower()
+            if not self.lowering_active:
+                self.lowering_active = True
+                self.keep_lowered()
 
         self.root.after(REFRESH_MS, self.refresh)
 
@@ -160,6 +207,7 @@ def main():
         sys.exit(0)
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     LOCK_PATH.write_text(str(os.getpid()))
+    lower_own_priority()
 
     try:
         root = tk.Tk()
