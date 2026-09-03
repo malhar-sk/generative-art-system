@@ -1,6 +1,8 @@
-# Runs the full export pipeline: copy Brave's History DB, then parse it to CSV.
+# Full daily pipeline: export Brave history -> parse -> categorize -> render art.
 # This is the script Task Scheduler calls.
 
 $root = Split-Path -Parent $PSScriptRoot
 & "$root\scripts\export_brave_history.ps1"
 python "$root\scripts\parse_brave_history.py"
+python "$root\scripts\categorize.py"
+python "$root\scripts\generate_art.py"
