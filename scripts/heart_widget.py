@@ -43,7 +43,7 @@ frequency* (which affects laptop idle power beyond what a CPU% number
 captures), not chasing an already-negligible CPU number down further.
 
 Runs continuously in the background. Auto-start at logon is opt-in --
-run scripts/register_heart_widget_task.ps1 yourself to set that up
+run scripts/setup_autostart.ps1 yourself to set that up
 (logon-triggered tasks are a form of persistent auto-start, so that's a
 decision you make explicitly, not something this script does on its
 own); until then, launch it manually with pythonw scripts/heart_widget.py.

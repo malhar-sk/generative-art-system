@@ -173,11 +173,12 @@ Launch it manually whenever you want it active:
 ```
 pythonw scripts\heart_widget.py
 ```
-To have it start automatically every time you log into Windows, run
-`scripts\register_heart_widget_task.ps1` yourself. That's a separate,
-opt-in step rather than something the pipeline sets up on its own —
-logon-triggered auto-start is a more invasive, persistent capability
-than a scheduled daily task, worth a deliberate decision on your end.
+To have it (and the resume watchdog below) start automatically every
+time you log into Windows, run `scripts\setup_autostart.ps1` yourself.
+That's a separate, opt-in step rather than something the pipeline sets
+up on its own — logon-triggered auto-start is a more invasive,
+persistent capability than a scheduled daily task, worth a deliberate
+decision on your end.
 
 That script uses the Windows **Startup folder**, not Task Scheduler:
 `Register-ScheduledTask -AtLogOn` returns `Access is denied` in this
@@ -187,10 +188,10 @@ the main pipeline uses) register fine. The Startup folder is a
 different, equally standard Windows mechanism that isn't gated by
 whatever's blocking that specific Task Scheduler trigger type. Since a
 Startup-folder shortcut launches immediately at logon with no built-in
-delay option, the script generates a small VBScript launcher
-(`data/heart_widget_startup_launcher.vbs`, gitignored -- it embeds your
-machine's `pythonw.exe` path) that sleeps 45 seconds before actually
-starting the widget, so it still never adds to the startup rush.
+delay option, the script generates a small VBScript launcher per
+program (`data/*-launcher.vbs`, gitignored -- they embed your machine's
+`pythonw.exe` path) that sleeps 45 seconds before actually starting it,
+so neither ever adds to the startup rush.
 
 **Resource use.** Measured on a live instance before any of the
 changes below: ~0% CPU (below measurement precision over a 10s
@@ -215,6 +216,35 @@ that number, so the widget is built to minimize it regardless:
 This isn't a separate "low power mode" you opt into -- there's no
 real tradeoff to always running this way, so it's just how the
 widget behaves.
+
+## Recovering from sleep/wake glitches
+
+After certain sleep/wake cycles, desktop compositing can end up in a
+stale state where the wallpaper stops actually being drawn -- another
+app's window (in practice, Rainmeter's own desktop-attached skin) ends
+up covering the screen instead, and the heart widget can end up hidden
+behind it too. Nothing in this pipeline is actually broken when this
+happens -- the wallpaper registry setting and the widget process are
+both still correct the whole time, they just aren't being rendered.
+Restarting `explorer.exe` (Task Manager → find "Windows Explorer" →
+Restart) fixes it by forcing everything to redraw; confirmed this
+manually once.
+
+**`resume_watchdog.py`** automates that fix. It detects resume-from-
+sleep with a simple wall-clock heuristic rather than hooking raw
+Windows power-event messages (`WM_POWERBROADCAST`) -- it checks every
+30 seconds, and if the elapsed time since the last check is much
+longer than that (>90s), this process was suspended for a while, since
+its own thread can't run at all during sleep. This works regardless of
+which underlying clock does or doesn't keep ticking during suspend,
+because it's the watchdog's *own* execution that stalls, not a
+hardware counter's behavior -- a more robust approach than the
+already-proven-unreliable-in-this-project WorkerW-style Windows
+internals. On detecting resume, it restarts `explorer.exe`, re-applies
+the wallpaper, and relaunches the heart widget if it isn't already
+running. Runs at `IDLE` priority like the heart widget, registered and
+started the same way (see above) -- both are set up by the same
+`setup_autostart.ps1` script.
 
 ## Design note: determinism vs. novelty
 
