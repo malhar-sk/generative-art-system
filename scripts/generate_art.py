@@ -1,27 +1,32 @@
-"""Render a decay-weighted recent-history category mix as a screen-filling
-geometric mosaic PNG.
+"""Render a decay-weighted recent-history category mix as a geometric
+mosaic PNG, laid out on an 8x4 grid of sectors.
 
 Reads data/daily_category_mix.csv and combines it into one snapshot using
 exponential recency weighting (see HALF_LIFE_DAYS) rather than a single
 day's raw counts -- each prior day contributes, weighted down the further
 back it is, so the piece drifts gradually day to day instead of jumping
 around on daily noise, while still being dominated by roughly the last
-few weeks. The canvas is sized to the actual primary screen resolution,
-divided into a fine grid of icon-sized cells (using the configured
-Windows shell icon size). Symbols are drawn in randomly sized groups of
-those fine cells (mostly pairs and quads, sometimes bigger accent
-pieces) rather than one shape per tiny cell, since a single icon-sized
-shape would be too small to read.
+few weeks.
 
-How much of the screen fills is not a fixed floor or a forced 100% --
-it is a smooth, uncapped function of how much browsing happened that
-day, so the piece visibly grows or shrinks day to day rather than
-sitting at some artificial minimum or maximum. Past the filled budget,
-a few columns fade toward the background instead of stopping abruptly.
-Every group gets the same gutter inset regardless of its size or
-color, so the composition reads as evenly spaced -- the gutter itself
-is the negative space between pieces -- even though shape and color
-choice stay random.
+The canvas (the actual primary screen resolution) is divided into a
+SECTOR_COLS x SECTOR_ROWS grid of large sectors. Sectors fill in ring
+order starting from the top-left corner, expanding outward to adjacent
+sectors (Chebyshev/8-directional distance), until however many sectors
+the day's data warrants -- not a fixed floor or a forced full screen,
+just a smooth, uncapped function of how much browsing happened. Each
+active sector gets completely filled with small icon-sized shapes,
+inactive sectors stay background. Since sectors are strictly
+non-overlapping regions and each one is packed independently with the
+same non-overlap-checked placement used before, symbols never overlap,
+across sectors or within one.
+
+Within a sector, symbols are drawn in randomly sized groups of icon-sized
+cells (mostly pairs and quads, sometimes bigger accent pieces) rather
+than one shape per tiny cell, since a single icon-sized shape would be
+too small to read. Every group gets the same gutter inset regardless of
+its size or color, so the composition reads as evenly spaced -- the
+gutter itself is the negative space between pieces -- even though shape
+and color choice stay random.
 
 The grid layout itself has memory: each render loads the previous
 render's group placement (data/render_state.json) and reuses it at
@@ -31,7 +36,7 @@ regardless of whether a group's geometry was inherited or freshly
 rolled, so the piece has actual lineage (today's image descends from
 yesterday's) instead of being a full recompute each time. Falls back
 to a fully fresh layout if the state file is missing, corrupt, or the
-screen/icon size changed since the last render.
+screen/icon/sector configuration changed since the last render.
 """
 import csv
 import ctypes
@@ -42,6 +47,7 @@ import random
 import sys
 import winreg
 from datetime import date, timedelta
+from itertools import groupby
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -67,14 +73,16 @@ ACCENT_COLORS = [
     (59, 102, 89),    # #3B6659 -- dark green, brightened from #23312B
 ]
 
-FADE_COLUMNS = 3.0        # width, in fine-cell columns, of the fade-to-background zone
-COVERAGE_SCALE = 80       # *daily-average* visit count at which coverage reaches ~63% of the screen
+SECTOR_COLS = 8           # outer grid: sectors across
+SECTOR_ROWS = 4           # outer grid: sectors down
+COVERAGE_SCALE = 80       # *daily-average* visit count at which coverage reaches ~63% of the sectors
 GUTTER_FRACTION = 0.12    # inset applied to every group's box, as a fraction of icon size
 
 HALF_LIFE_DAYS = 8        # a day's weight halves every this many days back
 LOOKBACK_DAYS = 90        # days of history considered; beyond this the weight is negligible anyway
 
 REUSE_PROBABILITY = 0.70  # fraction of grid positions that inherit yesterday's group (size + shape type) rather than rolling fresh -- the piece's visual memory
+MIN_SECTORS = 1           # always render at least the corner sector, even on the quietest day -- never a fully blank canvas
 
 
 def detect_screen_size():
@@ -160,10 +168,6 @@ def shade(color, factor):
     return tuple(max(0, min(255, int(c * factor))) for c in color)
 
 
-def blend(color, alpha):
-    return tuple(int(bg * (1 - alpha) + c * alpha) for bg, c in zip(BACKGROUND, color))
-
-
 def draw_triangle(draw, box, color, rng):
     x0, y0, x1, y1 = box
     corner = rng.choice(["tl", "tr", "bl", "br"])
@@ -224,34 +228,39 @@ SHAPE_DRAWERS = [draw_triangle, draw_fan, draw_circle, draw_semicircle, draw_str
 SHAPE_BY_NAME = {fn.__name__: fn for fn in SHAPE_DRAWERS}
 
 
-def load_prior_layout(cols, rows, icon):
-    """Returns {(col, row): (w, h, shape_name)} for the previous render's
-    group placement, keyed by each group's origin cell. Empty dict (fresh
-    layout, no bias) if the state file is missing, corrupt, or the grid
-    dimensions changed since the last render (different screen/icon size
-    makes the old positions meaningless)."""
+def load_prior_layout(screen_w, screen_h, icon):
+    """Returns {(srow, scol, col, row): (w, h, shape_name)} for the previous
+    render's group placement, keyed by sector + each group's origin cell
+    within that sector. Empty dict (fresh layout, no bias) if the state
+    file is missing, corrupt, or the screen/icon/sector configuration
+    changed since the last render (makes the old positions meaningless)."""
     try:
         with LAYOUT_STATE_PATH.open(encoding="utf-8") as f:
             state = json.load(f)
         grid = state["grid"]
-        if (grid["cols"], grid["rows"], grid["icon"]) != (cols, rows, icon):
+        expected = (SECTOR_COLS, SECTOR_ROWS, icon, screen_w, screen_h)
+        actual = (grid["sector_cols"], grid["sector_rows"], grid["icon"], grid["screen_w"], grid["screen_h"])
+        if expected != actual:
             return {}
         return {
-            (g["col"], g["row"]): (g["w"], g["h"], g["shape"])
+            (g["srow"], g["scol"], g["col"], g["row"]): (g["w"], g["h"], g["shape"])
             for g in state["groups"]
         }
     except (FileNotFoundError, OSError, ValueError, KeyError, TypeError):
         return {}
 
 
-def save_layout(day, cols, rows, icon, placed_groups):
+def save_layout(day, screen_w, screen_h, icon, placed_groups):
     LAYOUT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     state = {
         "date": day,
-        "grid": {"cols": cols, "rows": rows, "icon": icon},
+        "grid": {
+            "sector_cols": SECTOR_COLS, "sector_rows": SECTOR_ROWS,
+            "icon": icon, "screen_w": screen_w, "screen_h": screen_h,
+        },
         "groups": [
-            {"col": col, "row": row, "w": w, "h": h, "shape": shape_name}
-            for col, row, w, h, shape_name in placed_groups
+            {"srow": srow, "scol": scol, "col": col, "row": row, "w": w, "h": h, "shape": shape_name}
+            for srow, scol, col, row, w, h, shape_name in placed_groups
         ],
     }
     with LAYOUT_STATE_PATH.open("w", encoding="utf-8") as f:
@@ -277,14 +286,36 @@ def fits_free(used, col, row, w, h, cols, rows):
     return not any(used[col + dx][row + dy] for dx in range(w) for dy in range(h))
 
 
+def sector_bounds(index, count, total_px):
+    """Pixel span [start, end) for sector `index` of `count` along an axis
+    of length total_px -- linear interpolation so the sectors always cover
+    the full screen exactly (any remainder lands in the last sector) rather
+    than a fixed-width sector leaving a gap at the edge."""
+    return (index * total_px) // count, ((index + 1) * total_px) // count
+
+
+def sector_fill_order(rng):
+    """Sector (row, col) coordinates ordered starting from the top-left
+    corner, expanding outward ring by ring to adjacent sectors (Chebyshev
+    distance -- diagonal neighbors count as adjacent, giving square rings
+    growing from the corner). Each ring's internal order is shuffled with
+    the day's seed for variety, without disturbing the ring-by-ring
+    outward growth itself."""
+    coords = [(r, c) for r in range(SECTOR_ROWS) for c in range(SECTOR_COLS)]
+    coords.sort(key=lambda rc: max(rc[0], rc[1]))
+    ordered = []
+    for _, ring in groupby(coords, key=lambda rc: max(rc[0], rc[1])):
+        ring = list(ring)
+        rng.shuffle(ring)
+        ordered.extend(ring)
+    return ordered
+
+
 def render(day, counts, effective_visits):
     screen_w, screen_h = detect_screen_size()
     icon = detect_icon_size()
-
-    cols = screen_w // icon
-    rows = screen_h // icon
-    total_cells = cols * rows
     gutter = icon * GUTTER_FRACTION
+    total_sectors = SECTOR_COLS * SECTOR_ROWS
 
     categories = list(counts.keys()) or ["other"]
     weights = [counts.get(c, 1) for c in categories]  # relative shares; scale doesn't matter here
@@ -293,90 +324,84 @@ def render(day, counts, effective_visits):
     seed_int = int(hashlib.sha256(day.encode()).hexdigest(), 16)
     rng = random.Random(seed_int)
 
-    # Uncapped, organic coverage -- approaches (never forced to) a full
-    # screen as visit volume grows, shrinks back down on quiet days.
+    # Uncapped, organic coverage -- approaches (never forced to) all 32
+    # sectors as visit volume grows, shrinks back down on quiet days.
     # Driven by effective_visits (the decay-weighted window renormalized
     # to a single-day scale), not a raw multi-day sum -- otherwise blending
-    # weeks of history together would saturate this near 100% every time.
+    # weeks of history together would saturate this every time.
     coverage = 1 - math.exp(-effective_visits / COVERAGE_SCALE)
-    budget_cells = round(coverage * total_cells)
-    boundary_col = budget_cells / rows if rows else 0
+    budget_sectors = max(MIN_SECTORS, round(coverage * total_sectors))
+    active_sectors = sector_fill_order(rng)[:budget_sectors]
 
-    prior_layout = load_prior_layout(cols, rows, icon)
+    prior_layout = load_prior_layout(screen_w, screen_h, icon)
 
-    img = Image.new("RGB", (cols * icon, rows * icon), BACKGROUND)
+    img = Image.new("RGB", (screen_w, screen_h), BACKGROUND)
     draw = ImageDraw.Draw(img)
-    used = [[False] * rows for _ in range(cols)]
 
-    filled_cells = 0
-    symbol_count = 0
     placed_groups = []
-    for col in range(cols):
-        row = 0
-        while row < rows:
-            if used[col][row]:
-                row += 1
-                continue
+    symbol_count = 0
+    for srow, scol in active_sectors:
+        sx0, sx1 = sector_bounds(scol, SECTOR_COLS, screen_w)
+        sy0, sy1 = sector_bounds(srow, SECTOR_ROWS, screen_h)
+        cols = max(1, (sx1 - sx0) // icon)
+        rows = max(1, (sy1 - sy0) // icon)
+        used = [[False] * rows for _ in range(cols)]
 
-            prior = prior_layout.get((col, row))
-            if prior is not None and rng.random() < REUSE_PROBABILITY:
-                w, h, shape_name = prior
-                shape_fn = SHAPE_BY_NAME.get(shape_name) or SHAPE_DRAWERS[rng.randrange(len(SHAPE_DRAWERS))]
-            else:
-                w, h = choose_group_size(rng)
-                shape_fn = SHAPE_DRAWERS[rng.randrange(len(SHAPE_DRAWERS))]
+        for col in range(cols):
+            row = 0
+            while row < rows:
+                if used[col][row]:
+                    row += 1
+                    continue
 
-            while (w > 1 or h > 1) and not fits_free(used, col, row, w, h, cols, rows):
-                if w >= h and w > 1:
-                    w -= 1
-                elif h > 1:
-                    h -= 1
+                prior = prior_layout.get((srow, scol, col, row))
+                if prior is not None and rng.random() < REUSE_PROBABILITY:
+                    w, h, shape_name = prior
+                    shape_fn = SHAPE_BY_NAME.get(shape_name) or SHAPE_DRAWERS[rng.randrange(len(SHAPE_DRAWERS))]
                 else:
-                    break
+                    w, h = choose_group_size(rng)
+                    shape_fn = SHAPE_DRAWERS[rng.randrange(len(SHAPE_DRAWERS))]
 
-            for dx in range(w):
-                for dy in range(h):
-                    used[col + dx][row + dy] = True
-            placed_groups.append((col, row, w, h, shape_fn.__name__))
+                while (w > 1 or h > 1) and not fits_free(used, col, row, w, h, cols, rows):
+                    if w >= h and w > 1:
+                        w -= 1
+                    elif h > 1:
+                        h -= 1
+                    else:
+                        break
 
-            outer = (col * icon, row * icon, (col + w) * icon, (row + h) * icon)
-            box = (outer[0] + gutter, outer[1] + gutter, outer[2] - gutter, outer[3] - gutter)
+                for dx in range(w):
+                    for dy in range(h):
+                        used[col + dx][row + dy] = True
+                placed_groups.append((srow, scol, col, row, w, h, shape_fn.__name__))
 
-            if filled_cells < budget_cells:
+                outer = (sx0 + col * icon, sy0 + row * icon, sx0 + (col + w) * icon, sy0 + (row + h) * icon)
+                box = (outer[0] + gutter, outer[1] + gutter, outer[2] - gutter, outer[3] - gutter)
+
                 category = rng.choices(categories, weights=weights)[0]
                 color = shade(palette[category], rng.uniform(0.85, 1.1))
                 shape_fn(draw, box, color, rng)
                 symbol_count += 1
-            else:
-                fade_alpha = max(0.0, min(1.0, 1 - (col - boundary_col) / FADE_COLUMNS))
-                if fade_alpha > 0.04:
-                    category = rng.choices(categories, weights=weights)[0]
-                    color = blend(palette[category], fade_alpha)
-                    shape_fn(draw, box, color, rng)
-                    symbol_count += 1
 
-            filled_cells += w * h
-            row += h
+                row += h
 
-    save_layout(day, cols, rows, icon, placed_groups)
+    save_layout(day, screen_w, screen_h, icon, placed_groups)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUT_DIR / f"{day}.png"
     img.save(out_path)
-    return out_path, symbol_count, budget_cells, total_cells, (screen_w, screen_h), icon
+    return out_path, symbol_count, len(active_sectors), total_sectors, (screen_w, screen_h), icon
 
 
 def main():
     day, counts, effective_visits = load_weighted_mix()
-    out_path, symbol_count, budget_cells, total_cells, screen, icon = render(day, counts, effective_visits)
+    out_path, symbol_count, filled_sectors, total_sectors, screen, icon = render(day, counts, effective_visits)
     mix_summary = ", ".join(
         f"{c}={n:.0f}" for c, n in sorted(counts.items(), key=lambda kv: -kv[1])
     )
-    grid_cols = screen[0] // icon
-    grid_rows = screen[1] // icon
-    print(f"Screen {screen[0]}x{screen[1]}, icon size {icon}px -> grid {grid_cols}x{grid_rows} ({total_cells} cells)")
+    print(f"Screen {screen[0]}x{screen[1]}, icon size {icon}px -> {SECTOR_COLS}x{SECTOR_ROWS} sector grid ({total_sectors} sectors)")
     print(f"As of {day} (decay-weighted, half-life {HALF_LIFE_DAYS}d): ~{effective_visits:.1f} effective visits/day across {len(counts)} categories ({mix_summary})")
-    print(f"Drew {symbol_count} symbols covering {budget_cells}/{total_cells} cells ({budget_cells/total_cells:.0%})")
+    print(f"Drew {symbol_count} symbols across {filled_sectors}/{total_sectors} sectors ({filled_sectors/total_sectors:.0%})")
     print(f"Rendered {out_path}")
 
 

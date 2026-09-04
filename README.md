@@ -89,22 +89,30 @@ Pipeline, in order, all under `scripts/`:
    as a geometric mosaic sized to your actual screen resolution
    (detected via the Win32 API at render time, physical pixels not
    DPI-scaled logical ones, so the wallpaper is sharp). The canvas is
-   divided into a fine grid of icon-sized cells (matches your
-   configured Windows shell icon size, read from the registry). Symbols
-   are drawn in randomly sized groups of those cells — mostly pairs and
-   quads, sometimes bigger accent pieces — each one a random shape
-   (triangle / quarter-circle fan / circle / semicircle / stripes /
-   square) colored by a category chosen with probability proportional
-   to that category's weighted share. Every group gets the same gutter
-   inset regardless of size or color, so the piece reads as evenly
-   spaced rather than a jumbled collage — the gutter is the negative
-   space between pieces. Groups pack **column by column starting from
-   the left**; how much of the screen fills is not a fixed floor or a
-   forced 100%, but a smooth, uncapped function of `effective_visits`
-   (`1 - e^(-effective_visits / COVERAGE_SCALE)`), so the piece visibly
-   grows or shrinks day to day. Past the filled budget, a few columns
-   **fade out toward the background** instead of stopping abruptly.
-   Background is black; the 5-color accent palette (`ACCENT_COLORS` in
+   divided into an **8x4 grid of sectors** (`SECTOR_COLS` /
+   `SECTOR_ROWS`); each sector, once active, is completely filled with
+   small icon-sized shapes (matches your configured Windows shell icon
+   size, read from the registry), drawn in randomly sized groups of
+   those cells — mostly pairs and quads, sometimes bigger accent
+   pieces — each one a random shape (triangle / quarter-circle fan /
+   circle / semicircle / stripes / square) colored by a category chosen
+   with probability proportional to that category's weighted share.
+   Every group gets the same gutter inset regardless of size or color,
+   so the piece reads as evenly spaced rather than a jumbled collage —
+   the gutter is the negative space between pieces. Because sectors are
+   strictly non-overlapping regions and each is packed independently
+   with the same non-overlap-checked placement, symbols never overlap,
+   across sectors or within one. Sectors activate **starting from the
+   top-left corner, expanding outward ring by ring to adjacent
+   sectors** (Chebyshev/8-directional distance, so diagonal neighbors
+   count -- gives an organic, roughly-square growth pattern from the
+   corner rather than a straight sweep); how many sectors fill is not
+   a fixed floor or a forced all-32, but a smooth, uncapped function of
+   `effective_visits` (`1 - e^(-effective_visits / COVERAGE_SCALE)`),
+   so the piece visibly grows or shrinks day to day. An inactive sector
+   just stays background -- no fade, a clean edge, which reads better
+   for this style than a gradient would. Background is black; the
+   5-color accent palette (`ACCENT_COLORS` in
    generate_art.py) is cream `#F2E7DA`, orange `#BF7A4B`, rust
    `#B8653B`, sage `#629475`, and dark green `#3B6659` — brightened
    versions of an original cream-background palette (`#F2E7DB` /
@@ -167,7 +175,7 @@ chroma key ends up matching some of a glyph's own blended edge pixels,
 producing a visible hatched artifact), so this sidesteps that entirely
 by just blending in. Works especially well in the top-right corner
 specifically, since that's also the last area the mosaic's
-left-to-right fill order ever reaches.
+top-left-corner-outward sector growth ever reaches.
 
 Launch it manually whenever you want it active:
 ```
@@ -251,13 +259,15 @@ started the same way (see above) -- both are set up by the same
 If the data-to-visual transform were purely deterministic, quiet/flat
 data days (barely any browsing, or one category dominating) would
 produce flat, boring art — undermining the whole point of satisfying
-novelty-seeking. `generate_art.py` handles this two ways: shape choice
-and fill order within the data-driven budget are seeded per-day random
-(not a fixed layout), and on a quiet day the fade-out zone still gives
-the piece visible texture at the boundary rather than just stopping
-dead. Real data still steers the color composition and how much of the
-canvas fills; the seeded randomness guarantees the arrangement is never
-the same twice.
+novelty-seeking. `generate_art.py` handles this in a few ways: shape
+choice within every sector is seeded per-day random (not a fixed
+layout); which sectors within a ring get filled first, when the budget
+runs out mid-ring, is also seeded-random (so the boundary of a quiet
+day's piece is a jagged, organic edge rather than a clean rectangle);
+and even on the quietest day, at least the corner sector still renders
+rather than the canvas going fully blank. Real data still steers the
+color composition and how many sectors fill; the seeded randomness
+guarantees the arrangement is never the same twice.
 
 ## Design note: evolving over time
 
@@ -291,9 +301,9 @@ instead, in order of the council's recommendation:
   from `data/art/`, or a quarterly grid tiling recent renders into one
   "generative memoir" piece.
 - Tune `TOP_N_DOMAINS` / `DEMOTE_BUFFER` (categorize.py) and
-  `COVERAGE_SCALE` / `HALF_LIFE_DAYS` / `GUTTER_FRACTION` /
-  `REUSE_PROBABILITY` (generate_art.py) as real usage patterns become
-  clearer.
+  `SECTOR_COLS` / `SECTOR_ROWS` / `COVERAGE_SCALE` / `HALF_LIFE_DAYS` /
+  `GUTTER_FRACTION` / `REUSE_PROBABILITY` / `MIN_SECTORS`
+  (generate_art.py) as real usage patterns become clearer.
 - Consider a secondary/fallback delivery surface beyond wallpaper (a
   local gallery folder?) — there's still no forcing function pulling
   this back into view otherwise.
