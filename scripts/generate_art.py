@@ -296,15 +296,17 @@ def sector_bounds(index, count, total_px):
 
 def sector_fill_order(rng):
     """Sector (row, col) coordinates ordered starting from the top-left
-    corner, expanding outward ring by ring to adjacent sectors (Chebyshev
-    distance -- diagonal neighbors count as adjacent, giving square rings
-    growing from the corner). Each ring's internal order is shuffled with
-    the day's seed for variety, without disturbing the ring-by-ring
-    outward growth itself."""
+    corner, expanding outward ring by ring to adjacent sectors (Manhattan
+    distance -- each ring is a diagonal band, row + col. Filling band by
+    band from the corner gives the filled region a triangular shape: the
+    edge between filled and unfilled is a diagonal line sweeping down-right,
+    not a square/rectangular border). Each ring's internal order is
+    shuffled with the day's seed for variety, without disturbing the
+    ring-by-ring outward growth itself."""
     coords = [(r, c) for r in range(SECTOR_ROWS) for c in range(SECTOR_COLS)]
-    coords.sort(key=lambda rc: max(rc[0], rc[1]))
+    coords.sort(key=lambda rc: rc[0] + rc[1])
     ordered = []
-    for _, ring in groupby(coords, key=lambda rc: max(rc[0], rc[1])):
+    for _, ring in groupby(coords, key=lambda rc: rc[0] + rc[1]):
         ring = list(ring)
         rng.shuffle(ring)
         ordered.extend(ring)

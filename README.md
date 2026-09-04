@@ -103,10 +103,11 @@ Pipeline, in order, all under `scripts/`:
    strictly non-overlapping regions and each is packed independently
    with the same non-overlap-checked placement, symbols never overlap,
    across sectors or within one. Sectors activate **starting from the
-   top-left corner, expanding outward ring by ring to adjacent
-   sectors** (Chebyshev/8-directional distance, so diagonal neighbors
-   count -- gives an organic, roughly-square growth pattern from the
-   corner rather than a straight sweep); how many sectors fill is not
+   top-left corner, expanding outward ring by ring** by Manhattan
+   distance (`row + col`) -- each ring is a diagonal band, so filling
+   band by band gives the growing region a **triangular** shape (a
+   diagonal edge sweeping down-right), not a square/rectangular one;
+   how many sectors fill is not
    a fixed floor or a forced all-32, but a smooth, uncapped function of
    `effective_visits` (`1 - e^(-effective_visits / COVERAGE_SCALE)`),
    so the piece visibly grows or shrinks day to day. An inactive sector
@@ -173,9 +174,13 @@ background color rather than true window transparency — Windows'
 `-transparentcolor` trick breaks on anti-aliased text/emoji (a single
 chroma key ends up matching some of a glyph's own blended edge pixels,
 producing a visible hatched artifact), so this sidesteps that entirely
-by just blending in. Works especially well in the top-right corner
-specifically, since that's also the last area the mosaic's
-top-left-corner-outward sector growth ever reaches.
+by just blending in. Works well in the top-right corner specifically,
+since the mosaic grows as a triangular wedge from the top-left corner
+toward the bottom-right (see "How it works" step 4) -- the top-right
+stays clear on all but the highest-coverage days. The single latest
+area reached is technically the bottom-right corner instead, for the
+same reason; worth moving the button there if coverage regularly gets
+high enough to reach the top-right first.
 
 Launch it manually whenever you want it active:
 ```
